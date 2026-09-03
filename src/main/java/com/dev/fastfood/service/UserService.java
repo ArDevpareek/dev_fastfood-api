@@ -27,7 +27,7 @@ public class UserService {
         // Check FIRST, before touching the database with a save.
         // If this email already exists, stop here.
         if (userRepository.existsByEmail(email)) {
-            throw new RuntimeException("Email already in use: " + email);
+            throw new com.dev.fastfood.exception.DuplicateResourceException("Email already in use: " + email);
         }
 
         User user = new User();

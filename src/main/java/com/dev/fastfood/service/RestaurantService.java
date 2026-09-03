@@ -38,6 +38,6 @@ public class RestaurantService {
         // message instead of silently returning nothing."
         return restaurantRepository.findById(restaurantId)
                 .orElseThrow(() ->
-                        new RuntimeException("Restaurant not found: " + restaurantId));
+                        new com.dev.fastfood.exception.ResourceNotFoundException("Restaurant not found: " + restaurantId));
     }
 }
