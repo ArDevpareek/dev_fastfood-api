@@ -51,7 +51,7 @@ public class OrderService {
                         "User not found: " + request.getUserId()));
 
         // ---- CHECK 2: does the restaurant exist? ----
-        Restaurant restaurant = restaurantRepository.findById(request.getRestaurantId())
+        Restaurant restaurant = restaurantRepository.findByIdForUpdate(request.getRestaurantId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Restaurant not found: " + request.getRestaurantId()));
 
@@ -74,7 +74,7 @@ public class OrderService {
                 .map(OrderItemRequest::getMenuItemId)
                 .collect(Collectors.toList());
 
-        List<MenuItem> foundMenuItems = menuItemRepository.findAllById(menuItemIds);
+        List<MenuItem> foundMenuItems = menuItemRepository.findAllByIdForUpdate(menuItemIds);
 
         // Turn the list into a Map for fast lookup by ID, like a dictionary.
         Map<UUID, MenuItem> menuItemMap = foundMenuItems.stream()

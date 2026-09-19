@@ -1,23 +1,21 @@
 package com.dev.fastfood.repository;
 
 import com.dev.fastfood.entity.Restaurant;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.util.Optional;
 import java.util.UUID;
 
-    // This interface gives you free database operations — you write NO code
-// inside it, Spring builds the actual implementation automatically at startup.
-//
-// JpaRepository<Restaurant, UUID> means:
-//   - Restaurant = which table/entity this manages
-//   - UUID = the type of that table's ID column
-//
-// Just by extending this, you instantly get:
-//   findAll()      → get every restaurant
-//   findById(id)   → get one restaurant by its ID
-//   save(entity)   → insert or update a restaurant
-//   deleteById(id) → delete a restaurant
-// ...and more, for free.
-    public interface RestaurantRepository extends JpaRepository<Restaurant, UUID> {
-    }
+public interface RestaurantRepository extends JpaRepository<Restaurant, UUID> {
 
+    // @Lock(PESSIMISTIC_WRITE) means: when this query fetches a restaurant,
+    // also tell the database "lock this row — nobody else can change it
+    // until my current transaction finishes."
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM Restaurant r WHERE r.id = :id")
+    Optional<Restaurant> findByIdForUpdate(@Param("id") UUID id);
+}
