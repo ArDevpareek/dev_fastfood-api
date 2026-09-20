@@ -3,6 +3,7 @@ package com.dev.fastfood.service;
 import com.dev.fastfood.entity.Restaurant;
 import com.dev.fastfood.repository.RestaurantRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.cache.annotation.Cacheable;
 
 import java.util.List;
 import java.util.UUID;
@@ -26,6 +27,12 @@ public class RestaurantService {
 
     // Returns every restaurant in the database.
     // findAll() is one of the free methods JpaRepository gave us.
+    //
+    // @Cacheable belongs HERE, on the method — not on the class. Putting it
+    // on the class (as it was before) applies it to every public method,
+    // including getRestaurantById below, which would start caching single
+    // restaurants under this same cache without us intending it to.
+    @Cacheable("restaurants")
     public List<Restaurant> getAllRestaurants() {
         return restaurantRepository.findAll();
     }

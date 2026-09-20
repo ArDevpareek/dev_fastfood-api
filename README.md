@@ -1,18 +1,24 @@
-# Fastfood API — Milestone 1
+# Fastfood API — Milestones 1 & 2
 
 Backend Engineering Project — Impactis × TCS
-High-Performance API Systems, Phase 1: Outline of the RESTful Application
+High-Performance API Systems, Phase 1–2: RESTful Application + Caching
 
 ---
 
 ## What this is
 
-A Spring Boot backend for a food delivery app simulation. This milestone covers the core RESTful application — data model, all 7 required endpoints, validation, error handling, and testing. Caching (Redis) and query optimization are intentionally deferred to later phases.
+A Spring Boot backend for a food delivery app simulation.
+
+- **Milestone 1** covers the core RESTful application — data model, all 7 required endpoints, validation, error handling, and testing.
+- **Milestone 2** adds Redis caching on `GET /restaurants` and `GET /menu` — see [Milestone 2 — Caching (Redis)](#milestone-2--caching-redis) below.
+
+Query optimization is intentionally deferred to a later phase.
 
 ## Tech stack
 
 - **Java 21**, **Spring Boot 4.1.1**
 - **PostgreSQL 16** (via Docker)
+- **Redis 7** (via Docker) — response caching, Milestone 2
 - **Maven** for build and dependency management
 - **Spring Data JPA / Hibernate** for database access
 - **Spring Security (BCrypt only)** — used purely for password hashing, not authentication
@@ -22,14 +28,14 @@ A Spring Boot backend for a food delivery app simulation. This milestone covers 
 
 ## How to run this
 
-**1. Start the database**
+**1. Start the database and cache**
 
 ```
 cd fast-food-api
 docker compose up -d
 ```
 
-This starts Postgres in a container and automatically creates all 5 tables from `init.sql`.
+This starts Postgres and Redis in containers; Postgres automatically creates all 5 tables from `init.sql`.
 
 **2. Run the application**
 
@@ -241,10 +247,58 @@ Both configured thresholds passed (`p95 < 1000ms`, `failure rate < 5%`) with wid
 
 ---
 
+## Milestone 2 — Caching (Redis)
+
+### What's cached
+
+| Endpoint | Cache name | Key | TTL |
+|---|---|---|---|
+| `GET /restaurants` | `restaurants` | (none — one shared entry, the full list) | 10 minutes |
+| `GET /menu?restaurantId=` | `menus` | `restaurantId` | 2 minutes |
+
+**Why these TTLs:** restaurants rarely change (nothing currently writes to the `restaurants` cache — see below), so a longer window is safe and cuts DB load further. Menus change more often — new items, availability toggles — so a shorter window caps how stale a menu can ever get at 2 minutes.
+
+An empty menu (a restaurant with zero items) still gets cached correctly — `@Cacheable` only skips caching a `null` return value, and an empty list isn't `null`.
+
+### Cache invalidation on writes
+
+`POST /restaurants/{restaurantId}/menu-items` evicts that restaurant's `menus` entry (`@CacheEvict(value = "menus", key = "#restaurantId")`) so a newly added item appears on the very next `GET /menu` call instead of waiting up to 2 minutes. Only that restaurant's entry is evicted — every other restaurant's cached menu is untouched.
+
+**Design decision:** there's currently no working `POST /restaurants` endpoint in the codebase to evict the `restaurants` cache from (see *Known gaps* below), so no eviction was added for it. If restaurant creation is implemented later, it should evict the `restaurants` cache the same way, or that cache's 10-minute TTL becomes the only thing standing between a new restaurant and it actually showing up.
+
+### Redis-down resilience
+
+If Redis is unreachable, `GET /restaurants` and `GET /menu` still return correct data from Postgres — they don't fail. This comes from two changes:
+
+- **`CacheConfig.errorHandler()`** — a custom `CacheErrorHandler` that logs a warning instead of letting a Redis exception propagate on a cache get/put/evict/clear failure. Spring's cache interceptor treats a swallowed get-error as a miss, so the real (database) method just runs as if nothing were cached.
+- **`spring.data.redis.timeout=1s` / `connect-timeout=1s`** in `application.properties` — without this, Lettuce's default 60-second command timeout means a request would hang for a full minute before the error handler ever got a chance to fall back. Bounding it to 1s makes the fallback actually feel graceful instead of like a hang.
+
+Verified by killing the Redis container while the app was running: the very next request still returned `200` with correct data in ~1 second, with a `WARN` logged. The app also starts up fine if Redis is already down when it boots.
+
+### Hit/miss observability
+
+`ObservableRedisCache` / `ObservableRedisCacheManager` (in `config/`) log every lookup as `Cache HIT` or `Cache MISS`, with the cache name and key. This exists because `@Cacheable`'s method body only ever runs on a miss — there's no place inside `RestaurantService` or `MenuItemService` themselves to log a hit. Sample log output:
+
+```
+Cache MISS [restaurants] key=SimpleKey [] — loading from the database
+Hibernate: select r1_0.id, ... from restaurants r1_0
+Cache HIT  [restaurants] key=SimpleKey []
+```
+(note: no `Hibernate:` line before the HIT — confirming Postgres wasn't touched.)
+
+### Bugs found and fixed while wiring this up
+
+- `@Cacheable("restaurants")` was on the `RestaurantService` **class**, not on `getAllRestaurants()` — meaning it silently applied to every public method in the class, including `getRestaurantById`. Moved to the one method it was meant for.
+- `MenuItemRepository.findByRestaurantId` returned `MenuItem`s holding a lazy Hibernate proxy for `restaurant`. Caching that proxy embedded an internal `hibernateLazyInitializer` field in the JSON that Jackson couldn't read back — every cache HIT for `/menu` returned a 500. Fixed with a `JOIN FETCH` so `restaurant` is a real, already-loaded object by the time it gets cached.
+- `GenericJacksonJsonRedisSerializer.builder().build()` doesn't embed type information by default, so a cache HIT deserialized entities into plain `LinkedHashMap`s instead of `MenuItem`/`Restaurant` objects — also a 500. Fixed by enabling default typing, scoped to a `PolymorphicTypeValidator` that only allows `com.dev.fastfood.*` plus the specific JDK value-type packages actually in use (`java.util`, `java.math`, `java.time`, `java.lang`) — not "allow any class," since this cache only ever needs to hold our own types.
+
+All three were only visible by actually hitting the endpoint twice and reading the response body, not from compiling or starting the app — the first request (a cache miss) always looked fine either way.
+
+---
+
 ## What's not in this milestone (by design)
 
 - Authentication / login / JWT — not in the spec. Spring Security is used only for password hashing.
-- Redis caching — Phase 2
 - Kafka / async processing — Phase 2/3
 - Query optimization, indexing, N+1 fixes — Phase 3
 - Update/delete endpoints — only the 7 specified endpoints were built
@@ -257,3 +311,4 @@ Both configured thresholds passed (`p95 < 1000ms`, `failure rate < 5%`) with wid
 - Bean validation (`@Valid`, `@NotBlank` etc.) is not yet applied to request DTOs — planned as a follow-up before Phase 2.
 - Controller-layer tests (`@WebMvcTest`) not yet written — service-layer tests were prioritized since that's where the business logic lives.
 - `RestaurantService` and `UserService` currently have lighter test coverage than `OrderService`.
+- `POST /restaurants` is documented above (Milestone 1) but isn't actually implemented — `RestaurantController` only has the two `GET` endpoints. Noticed while adding Milestone 2 caching (it's the reason the `restaurants` cache has no eviction path); not fixed here since restaurant creation is Milestone 1 scope.

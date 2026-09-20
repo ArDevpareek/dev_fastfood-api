@@ -90,8 +90,8 @@ class OrderServiceTest {
     void createOrder_happyPath_calculatesCorrectTotals() {
         // ARRANGE: tell every fake repository what to return when asked
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
-        when(restaurantRepository.findById(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
-        when(menuItemRepository.findAllById(anyList())).thenReturn(List.of(testMenuItem));
+        when(restaurantRepository.findByIdForUpdate(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
+        when(menuItemRepository.findAllByIdForUpdate(anyList())).thenReturn(List.of(testMenuItem));
         // save() normally returns what got saved — we fake that too,
         // just handing back whatever was passed in.
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -120,7 +120,7 @@ class OrderServiceTest {
     void createOrder_inactiveRestaurant_throwsBusinessRule() {
         testRestaurant.setIsActive(false);
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
-        when(restaurantRepository.findById(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
+        when(restaurantRepository.findByIdForUpdate(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
 
         assertThatThrownBy(() -> orderService.createOrder(buildValidRequest()))
                 .isInstanceOf(BusinessRuleException.class)
@@ -134,8 +134,8 @@ class OrderServiceTest {
         testRestaurant.setMinOrderAmount(new BigDecimal("500.00"));
 
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
-        when(restaurantRepository.findById(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
-        when(menuItemRepository.findAllById(anyList())).thenReturn(List.of(testMenuItem));
+        when(restaurantRepository.findByIdForUpdate(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
+        when(menuItemRepository.findAllByIdForUpdate(anyList())).thenReturn(List.of(testMenuItem));
 
         assertThatThrownBy(() -> orderService.createOrder(buildValidRequest()))
                 .isInstanceOf(BusinessRuleException.class)
@@ -148,8 +148,8 @@ class OrderServiceTest {
         // request DTO has no price field at all (by design), let's prove
         // the actual unit price used is whatever's in the database.
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
-        when(restaurantRepository.findById(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
-        when(menuItemRepository.findAllById(anyList())).thenReturn(List.of(testMenuItem));
+        when(restaurantRepository.findByIdForUpdate(testRestaurant.getId())).thenReturn(Optional.of(testRestaurant));
+        when(menuItemRepository.findAllByIdForUpdate(anyList())).thenReturn(List.of(testMenuItem));
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
         when(orderItemRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 

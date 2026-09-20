@@ -4,6 +4,8 @@ import com.dev.fastfood.entity.MenuItem;
 import com.dev.fastfood.entity.Restaurant;
 import com.dev.fastfood.repository.MenuItemRepository;
 import com.dev.fastfood.repository.RestaurantRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -25,6 +27,12 @@ public class MenuItemService {
         this.restaurantRepository = restaurantRepository;
     }
 
+    // Evicts this restaurant's cached menu so the new item shows up on the
+    // very next GET /menu call, instead of waiting for the 2-minute TTL to
+    // expire. We only evict THIS restaurant's entry (key = restaurantId),
+    // not the whole "menus" cache — other restaurants' cached menus are
+    // untouched and still valid.
+    @CacheEvict(value = "menus", key = "#restaurantId")
     public MenuItem addMenuItem(UUID restaurantId, String name, String description,
                                 BigDecimal price, Integer calories) {
 
@@ -49,6 +57,9 @@ public class MenuItemService {
     }
 
     // Powers GET /menu?restaurantId=
+    // key = "#restaurantId" means each restaurant gets its own cache entry
+    // (instead of one shared entry for every call to this method).
+    @Cacheable(value = "menus", key = "#restaurantId")
     public List<MenuItem> getMenuByRestaurant(UUID restaurantId) {
         return menuItemRepository.findByRestaurantId(restaurantId);
     }
