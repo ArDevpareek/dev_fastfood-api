@@ -76,6 +76,21 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis</artifactId>
 		</dependency>
+		<!-- The Boot STARTER, not plain spring-kafka: in Boot 4 auto-configuration
+		     is split per technology, so plain spring-kafka alone gives you the
+		     classes but none of Boot's wiring — no @KafkaListener processing
+		     (the consumer silently never starts) and no KafkaAdmin (NewTopic
+		     beans are never created). No version on purpose: Boot's parent BOM
+		     picks the one compatible with Boot 4.1.1, like every other starter here. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka-test</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -83,7 +98,10 @@
 			<plugin>
 				<groupId>org.jacoco</groupId>
 				<artifactId>jacoco-maven-plugin</artifactId>
-				<version>0.8.12</version>
+				<!-- 0.8.14+ is needed to read Java 25 class files (major version 69);
+				     0.8.12 couldn't instrument the classes Mockito generates at runtime
+				     on a Java 25 JVM and printed "Unsupported class file major version 69". -->
+				<version>0.8.15</version>
 				<executions>
 					<execution>
 						<goals>
