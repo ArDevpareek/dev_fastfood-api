@@ -4,6 +4,7 @@ import com.dev.fastfood.dto.CreateUserRequest;
 import com.dev.fastfood.dto.UserResponse;
 import com.dev.fastfood.entity.User;
 import com.dev.fastfood.service.UserService;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,7 +26,7 @@ public class UserController {
     // @RequestBody means: take the JSON someone sends, and turn it
     // into a CreateUserRequest object automatically.
     @PostMapping
-    public ResponseEntity<UserResponse> createUser(@RequestBody CreateUserRequest request) {
+    public ResponseEntity<UserResponse> createUser(@Valid @RequestBody CreateUserRequest request) {
 
         User createdUser = userService.createUser(
                 request.getEmail(),

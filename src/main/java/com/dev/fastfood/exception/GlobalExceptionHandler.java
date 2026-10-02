@@ -3,14 +3,37 @@ package com.dev.fastfood.exception;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 // @RestControllerAdvice = "this class catches exceptions thrown by
 // ANY controller in the whole app." One central place, instead of
 // try/catch blocks scattered everywhere.
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    // Thrown automatically by Spring when a @Valid @RequestBody fails one
+    // or more bean-validation annotations (@NotBlank, @Size, @Positive,
+    // etc.) on the DTO — the controller method body never even runs.
+    // Collects every failing field into one map, instead of the client
+    // only ever seeing the FIRST failure and having to fix-and-resubmit
+    // one field at a time.
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(
+            MethodArgumentNotValidException ex, HttpServletRequest request) {
+        Map<String, String> fieldErrors = new LinkedHashMap<>();
+        for (FieldError fieldError : ex.getBindingResult().getFieldErrors()) {
+            fieldErrors.put(fieldError.getField(), fieldError.getDefaultMessage());
+        }
+        ErrorResponse body = ErrorResponse.ofValidation(400, "Bad Request",
+                "Validation failed", request.getRequestURI(), fieldErrors);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
 
     // Whenever a ResourceNotFoundException is thrown ANYWHERE in the app,
     // this method catches it and builds a clean 404 response instead.

@@ -3,6 +3,7 @@ package com.dev.fastfood.controller;
 import com.dev.fastfood.dto.CreateOrderRequest;
 import com.dev.fastfood.dto.OrderResponse;
 import com.dev.fastfood.service.OrderService;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,7 +31,7 @@ public class OrderController {
     // later, off the request thread, via Kafka. 202 Accepted (not 201
     // Created) reflects that: "accepted for processing," not "fully done."
     @PostMapping
-    public ResponseEntity<OrderResponse> createOrder(@RequestBody CreateOrderRequest request) {
+    public ResponseEntity<OrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest request) {
         OrderResponse response = orderService.createOrder(request);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }

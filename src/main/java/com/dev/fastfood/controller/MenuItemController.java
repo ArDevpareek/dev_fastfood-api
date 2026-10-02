@@ -4,6 +4,7 @@ import com.dev.fastfood.dto.CreateMenuItemRequest;
 import com.dev.fastfood.dto.MenuItemResponse;
 import com.dev.fastfood.entity.MenuItem;
 import com.dev.fastfood.service.MenuItemService;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,7 +27,7 @@ public class MenuItemController {
     @PostMapping("/restaurants/{restaurantId}/menu-items")
     public ResponseEntity<MenuItemResponse> addMenuItem(
             @PathVariable UUID restaurantId,
-            @RequestBody CreateMenuItemRequest request) {
+            @Valid @RequestBody CreateMenuItemRequest request) {
 
         MenuItem created = menuItemService.addMenuItem(
                 restaurantId,

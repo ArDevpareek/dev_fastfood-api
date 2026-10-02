@@ -1,14 +1,29 @@
 package com.dev.fastfood.dto;
 
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
 // This describes exactly what we expect someone to send us
-// when creating a new user. Just 5 plain fields, nothing fancy yet
-// (we'll add proper validation like "email must be valid" on a later day).
+// when creating a new user.
 public class CreateUserRequest {
 
+    @NotBlank(message = "email is required")
+    @Email(message = "email must be a valid email address")
     private String email;
+
+    @NotBlank(message = "password is required")
+    @Size(min = 8, message = "password must be at least 8 characters long")
     private String password;
+
+    @NotBlank(message = "firstName is required")
+    @Size(max = 255, message = "firstName must be at most 255 characters")
     private String firstName;
+
+    @Size(max = 255, message = "lastName must be at most 255 characters")
     private String lastName;
+
+    @Size(max = 20, message = "phone must be at most 20 characters")
     private String phone;
 
     // Getters — Spring needs these to read the incoming JSON values.
