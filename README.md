@@ -133,7 +133,9 @@ Creates a new user. Password is hashed with BCrypt before storage — the raw pa
 **Response:** 201, user object — no password field of any kind in the response.
 
 ### `POST /order`
-Places an order. This is the core business-logic endpoint. Since Milestone 3 it validates synchronously, saves the order as `PENDING`, and hands the rest of the work to Kafka. It returns **202 Accepted** as soon as that is done (see [Milestone 3](#milestone-3--async-order-processing-kafka)). A bad request still gets an immediate 404/400, exactly as before. Validates, in order:
+Places an order. This is the core business-logic endpoint. Since Milestone 3 it validates synchronously, saves the order as `PENDING`, and hands the rest of the work to Kafka. It returns **202 Accepted** as soon as that is done (see [Milestone 3](#milestone-3--async-order-processing-kafka)). A bad request still gets an immediate 404/400, exactly as before.
+
+Bean validation on `CreateOrderRequest` runs first (missing/blank fields, an empty `items` list, `quantity` outside 1–100) and returns 400 before any of this runs. Once that passes, the service validates, in order:
 
 1. User exists (404)
 2. Restaurant exists (404)
@@ -200,8 +202,24 @@ Every error returns a consistent shape via a global exception handler:
 }
 ```
 
+A request body that fails bean validation (`@Valid` on the DTO) gets the same shape, plus a `fieldErrors` map — one entry per failing field, so the client can fix everything in one round trip instead of one field at a time:
+
+```json
+{
+  "timestamp": "2026-09-01T19:07:07.0...",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "path": "/order",
+  "fieldErrors": {
+    "items[0].quantity": "quantity cannot exceed 100 per item"
+  }
+}
+```
+
 | Situation | Status |
 |---|---|
+| Request body fails `@Valid` (blank name, missing field, quantity over the cap, ...) | 400, with `fieldErrors` |
 | Resource doesn't exist (bad ID) | 404 |
 | Business rule broken (inactive restaurant, below minimum, mismatched menu item) | 400 |
 | Duplicate resource (email already registered) | 409 |
@@ -226,24 +244,33 @@ Every error returns a consistent shape via a global exception handler:
 
 `PublishAckRecorderTest` (2 tests) checks the batching: 2,500 acknowledged orders become 3 `UPDATE` statements (1,000 + 1,000 + 500), and an empty queue touches the database not at all.
 
+`RestaurantServiceTest` (2 tests) covers `createRestaurant()` — fields are saved as given, and each call gets its own generated ID. The `@CacheEvict` on that method is a Spring AOP proxy concern, not testable behind Mockito's `@InjectMocks`; it was verified live instead (stopped at a real `GET` → `POST` → `GET` round trip against Redis — see *Milestone 2* below).
+
+**Controller-layer validation tests** (`@WebMvcTest`, 12 tests across `UserControllerTest`, `MenuItemControllerTest`, `OrderControllerTest`) load only the web layer — real `@Valid` annotations and the real `GlobalExceptionHandler`, with the service mocked out — and check that invalid requests never reach the service at all:
+
+- Blank/missing required fields (`email`, `name`, `userId`, `deliveryAddress`, ...) → 400 with that field named in `fieldErrors`
+- Invalid email format, password under 8 characters, negative price/calories → 400
+- `quantity: 400000` on an order item → 400 (`items[0].quantity`), `OrderService.createOrder` never called — this is the fix for the quantity-overflow bug below
+- A fully valid request still returns 201/202 as before
+
 The Kafka flows themselves (retries, DLT, duplicates, scaling) were verified live against the real broker. See [Live test results](#live-test-results) below.
 
 **Coverage (JaCoCo):**
 
 | Package | Coverage | Notes |
 |---|---|---|
-| `service` | 60% | Core business logic — where testing effort was concentrated |
-| `config` | 72% | Cache + Kafka wiring, exercised by the context-load test |
-| `messaging` | 45% | Kafka consumer + (de)serializers — the flows were verified live instead |
-| `dto` | 40% | Mostly data-holding classes |
+| `dto` | 82% | Validation annotations now exercised by the controller tests above |
+| `config` | 79% | Cache + Kafka wiring, exercised by the context-load test |
+| `service` | 67% | Core business logic — where testing effort was concentrated |
+| `exception` | 61% | `GlobalExceptionHandler`'s validation path now covered |
+| `controller` | 61% | Covered by the new `@WebMvcTest` classes above |
+| `messaging` | 48% | Kafka consumer + (de)serializers — the flows were verified live instead |
 | `entity` | 0% | Data classes only, no logic to test |
-| `exception` | 10% | Not yet covered |
-| `controller` | 25% | Not yet covered |
-| **Total** | **50%** | |
+| **Total** | **65%** | |
 
-*(Updated for Milestone 3. JaCoCo was also bumped from 0.8.12 to 0.8.15: the old version couldn't read the Java 25 class files Mockito generates at runtime, so earlier reports under-counted.)*
+*(Updated after the Milestone 1 validation/POST-restaurants follow-up. JaCoCo was bumped from 0.8.12 to 0.8.15 during Milestone 3: the old version couldn't read the Java 25 class files Mockito generates at runtime, so earlier reports under-counted.)*
 
-Testing effort was deliberately focused on `OrderService`, since that's where the actual business rules and calculations live. Entity and DTO classes are mostly generated getters/setters with no logic worth testing directly.
+Testing effort was deliberately focused on `OrderService` and, now, the request DTOs and the controllers that validate against them — entity classes are mostly generated getters/setters with no logic worth testing directly.
 
 ---
 
@@ -281,7 +308,7 @@ An empty menu (a restaurant with zero items) still gets cached correctly — `@C
 
 `POST /restaurants/{restaurantId}/menu-items` evicts that restaurant's `menus` entry (`@CacheEvict(value = "menus", key = "#restaurantId")`) so a newly added item appears on the very next `GET /menu` call instead of waiting up to 2 minutes. Only that restaurant's entry is evicted — every other restaurant's cached menu is untouched.
 
-**Design decision:** there's currently no working `POST /restaurants` endpoint in the codebase to evict the `restaurants` cache from (see *Known gaps* below), so no eviction was added for it. If restaurant creation is implemented later, it should evict the `restaurants` cache the same way, or that cache's 10-minute TTL becomes the only thing standing between a new restaurant and it actually showing up.
+`POST /restaurants` (added after this milestone) evicts the `restaurants` cache the same way (`@CacheEvict(value = "restaurants", allEntries = true)`), so a newly created restaurant shows up on the very next `GET /restaurants` instead of waiting out the 10-minute TTL. `allEntries = true` rather than a key, because this cache holds exactly one entry — the full list — which doesn't match any key computable from the create method's own arguments.
 
 ### Redis-down resilience
 
@@ -454,11 +481,7 @@ Script: [`k6-tests/order-create.js`](k6-tests/order-create.js). Same load shape 
 
 ## Known gaps
 
-- Bean validation (`@Valid`, `@NotBlank` etc.) is not yet applied to request DTOs — planned as a follow-up before Phase 2.
-- Controller-layer tests (`@WebMvcTest`) not yet written — service-layer tests were prioritized since that's where the business logic lives.
 - `RestaurantService` and `UserService` currently have lighter test coverage than `OrderService`.
-- `POST /restaurants` is documented above (Milestone 1) but isn't actually implemented — `RestaurantController` only has the two `GET` endpoints. Noticed while adding Milestone 2 caching (it's the reason the `restaurants` cache has no eviction path); not fixed here since restaurant creation is Milestone 1 scope.
-- *(Found in Milestone 3)* There's no upper limit on item quantity. `POST /order` with `quantity: 400000` overflows the `numeric(10,2)` total columns and returns a **500** instead of a 400. This is Milestone 1 validation scope, so it's left for the planned bean-validation pass.
 - *(Milestone 3)* **Consumer throughput is the bottleneck (~105 orders/s), not the API.** Not built yet, but the options, cheapest first:
   - **Use all 3 partitions in parallel inside one instance.** Today one listener thread reads all 3 partitions one message at a time. Setting the listener container's `concurrency` to 3 gives each partition its own thread, with no new infrastructure.
   - **More partitions and more consumer instances.** Partitions cap parallelism (one consumer per partition per group), so going beyond 3 parallel consumers means raising the partition count and running more instances.
