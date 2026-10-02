@@ -33,11 +33,11 @@ Query optimization is intentionally deferred to a later phase.
 **1. Start the database, cache and message broker**
 
 ```
-cd fast-food-api
+cd docker
 docker compose up -d
 ```
 
-This starts Postgres, Redis and Kafka in containers; Postgres automatically creates all 5 tables from `init.sql`. Kafka runs in KRaft mode (no Zookeeper) and is reachable from the host at `localhost:9092`. The app creates its own topics on startup.
+This starts Postgres, Redis and Kafka in containers; Postgres automatically creates all 5 tables from `docker/init.sql`. Kafka runs in KRaft mode (no Zookeeper) and is reachable from the host at `localhost:9092`. The app creates its own topics on startup.
 
 **2. Run the application**
 
@@ -404,6 +404,7 @@ All run against the real Postgres, Redis and Kafka containers.
 | Failover | Force-killed the 2nd instance | The 1st instance took over all 3 partitions after ~43s (Kafka's 45s session timeout; a graceful shutdown hands over almost immediately) |
 | Publish acknowledged | Placed an order, checked `published_at` | Recorded ~0.1–0.3s after creation; still set after the consumer saved the order as `CONFIRMED` |
 | Give-up only when unacknowledged | Inserted two `PENDING` orders, both 11 minutes old: one with `published_at`, one without | Unacknowledged one → `FAILED` on the next run; acknowledged one left `PENDING` and **not** re-published across two runs, then `CONFIRMED` once its message was delivered |
+| Kafka unreachable | Stopped the `fast-food-kafka` container, then `POST /order` | **202** in ~3.4s (bounded by `max.block.ms=3s`, not the old 60s default); order saved `PENDING` with `published_at` still `NULL`. Reconciliation tried to republish every 30s while Kafka stayed down (each attempt also failed fast, no hang); once the container was restarted, the next reconciliation run republished successfully and the order reached `CONFIRMED` |
 
 ### Bugs found by live testing
 
@@ -414,6 +415,7 @@ None of these showed up in unit tests or on startup:
 - **Order status came from a hidden JPA hook.** `PENDING` was only set by `Order`'s `@PrePersist`, which never runs when the repository is mocked. It's now set explicitly in `createOrder`, since `PENDING` is the idempotency key.
 - **The reconciliation job re-published orders that were only queued.** See the load test below; fixed with `published_at`.
 - **Recording acknowledgements one row at a time couldn't keep up.** The first version of `published_at` did one `UPDATE` per order on a 2-thread pool. At ~670 orders/s its queue overflowed, and 16,430 acknowledgements were dropped, so those orders looked unacknowledged and were re-published (17,928 times). Nothing was lost, since that's the designed fallback, but it defeated the point. Fixed by batching (`PublishAckRecorder`): the Kafka callback only queues the ID, and one `UPDATE … WHERE id IN (…)` writes up to 1,000 at a time.
+- **A dead Kafka turned a successfully-saved order into a 500.** `KafkaTemplate.send()` doesn't only fail through the `CompletableFuture` it returns — when the producer can't get cluster metadata within `max.block.ms`, it throws synchronously instead. That throw was happening inside the after-commit hook, on the request thread, so it escaped past the already-committed `PENDING` order row and the client got a `500` instead of `202`. Fixed by wrapping the `send()` call in a try/catch in `OrderService.sendEvent()` and treating a synchronous throw exactly like an async failure (logged, `published_at` stays `NULL`, reconciliation handles the rest). Only found by actually stopping the Kafka container — nothing in the unit tests exercises this path.
 
 ### Load test: `POST /order`, before vs. after
 
@@ -463,7 +465,7 @@ Script: [`k6-tests/order-create.js`](k6-tests/order-create.js). Same load shape 
   - **Caveat: parallelism alone won't help this exact test.** Every K6 order was for the *same* restaurant, and the consumer takes a `FOR UPDATE` lock on that restaurant row, so parallel consumers would mostly queue on that one lock. Real traffic spread across restaurants would scale better. It's also worth checking whether the restaurant lock needs to be exclusive at all: a shared lock (`FOR SHARE`) would still block deactivation mid-order without blocking other orders.
   - **Do less per message.** Batch listeners, or fewer round trips per order (currently several locked reads plus inserts, each its own statement).
 - *(Milestone 3)* `acks=all` only protects as much as the replication behind it. With a single broker and `replicas(1)`, an acknowledged message lives on one machine. Production would use 3 brokers, `replicas(3)`, and `min.insync.replicas=2`.
-- *(Milestone 3, not tested)* If Kafka is completely unreachable, the Kafka client's `send()` can block while it waits for broker metadata (up to `max.block.ms`, 60s by default). This happens in the after-commit hook on the request thread, so `POST /order` could hang for up to a minute. The order itself would be safe (saved, `published_at` NULL, picked up by reconciliation), but this path hasn't been tested live. Lowering `max.block.ms` is the likely fix.
+- *(Milestone 3, done)* If Kafka is completely unreachable, the default `max.block.ms` (60s) meant `KafkaTemplate.send()` could block the request thread for up to a minute. Fixed with short producer timeouts in `KafkaConfig` (`max.block.ms=3s`, `request.timeout.ms=3s`, `delivery.timeout.ms=5s`). Verified live by stopping the Kafka container and placing an order — see *Live test results* below.
 - *(Milestone 3, done)* The reconciliation job couldn't tell a lost order from a queued one. Fixed with `orders.published_at` (see *The dual-write problem* above).
 - *(Milestone 3, done)* Orders created before Milestone 3 were left in `PENDING`, which used to mean "placed" and now means "not yet processed". They were migrated to `CONFIRMED` by a one-off `UPDATE`, since the old synchronous code had already saved their items.
 - *(Milestone 3)* Every app instance runs its own reconciliation job, so with 2+ instances a stuck order can be re-published more than once. The idempotency check makes this harmless, but a production setup would use a scheduler lock (e.g. ShedLock) so only one instance runs it.

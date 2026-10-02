@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fast-food-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fast_food
+      POSTGRES_USER: fastfood
+      POSTGRES_PASSWORD: fastfood
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastfood -d fast_food"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: fast-food-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  # KRaft mode: no Zookeeper needed (Kafka's own KRaft protocol replaces it
+  # since Kafka 3.3+ — one fewer container competing for RAM). This is a
+  # single-node broker acting as both broker and controller ("combined
+  # mode"), which is fine for local dev but not how you'd run production.
+  #
+  # Two listeners, because two different networks need to reach this broker:
+  #   - PLAINTEXT (kafka:29092)      — for other containers on the Docker network
+  #   - PLAINTEXT_HOST (localhost:9092) — for the Spring app running on your host
+  # The original commented-out config only advertised PLAINTEXT://kafka:9092,
+  # which the host-side app could never resolve or reach.
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: fast-food-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      # Single-node dev setup — replication factor 1 everywhere (a real
+      # cluster would use 3 for durability).
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Any fixed-format ID works for a single-node dev cluster — this is
+      # the example ID from Confluent's own KRaft docs.
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      # Cap the JVM heap so Kafka doesn't help itself to a large chunk of
+      # a 16GB laptop already sharing RAM with Postgres, Redis and the JVM
+      # running the app itself.
+      KAFKA_HEAP_OPTS: "-Xmx512M -Xms512M"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:

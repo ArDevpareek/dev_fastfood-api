@@ -1,48 +1,41 @@
-# Milestone 3 — Progress Notes (in-progress, not committed)
+# Milestone 3 — Progress Notes
 
-Nothing has been committed or pushed. This file is just a resume-point.
+Milestone 3 is complete. The first commit (Kafka async order processing)
+landed, and this second session closed out the remaining items below.
 
-## ▶ NEXT STEPS (stopped 2026-09-27 afternoon — start here)
+## ▶ CLOSED OUT (2026-10-02)
 
-State when stopped: all Milestone 3 work below is done and verified,
-14/14 tests pass, README fully updated, app on port 8080 stopped.
-Still: **don't commit until the user says so.**
+1. **Infra files brought into the repo.** `docker-compose.yml` and `init.sql`
+   copied from `C:\Projects\fast-food-api` into `fastfood/docker/`. README
+   "How to run this" step 1 updated to `cd docker` → `docker compose up -d`.
+   The `init.sql` bind-mount path (`./init.sql`) resolves correctly since
+   both files sit in the same `docker/` folder. The old `fast-food-api`
+   folder was left alone (not deleted/retired) — nobody asked for that.
+2. **Kafka-down hang fixed and tested live.** Added `max.block.ms=3s`,
+   `request.timeout.ms=3s`, `delivery.timeout.ms=5s` to the producer
+   factory in `KafkaConfig`. Live test (stopped `fast-food-kafka`, posted
+   an order) first turned up a real bug: `KafkaTemplate.send()` can throw
+   *synchronously* (not just fail its future) when it can't get metadata
+   in time, and that exception was escaping the after-commit hook and
+   turning an already-saved `PENDING` order into a `500` response. Fixed
+   by wrapping the `send()` call in `OrderService.sendEvent()` in a
+   try/catch. Re-tested: `POST /order` now returns `202` in ~3.4s with
+   Kafka down, order stays `PENDING`/`published_at NULL`, reconciliation
+   retries every 30s without hanging, and once Kafka was restarted the
+   next reconciliation run republished it to `CONFIRMED`. README's Live
+   test results and Known gaps updated; the "not tested" gap is now "done".
+3. **The 6 `dddddddd` test orders removed.** Deleted their `order_items`
+   rows first, then the orders. Verified 0 remain
+   (`id::text like 'dddddddd-0000-4000-8000-%'`). DLT still holds order
+   0001's message and the 3 poison-pill messages from earlier testing —
+   left alone, as before.
+4. **Listener concurrency = 3 — skipped**, per explicit instruction this
+   round. `orderEventKafkaListenerContainerFactory` still runs with
+   default (1) concurrency.
 
-1. **Bring the infra files into the repo.** `C:\Projects\fast-food-api`
-   (docker-compose.yml + init.sql) is NOT a git repo, so its Milestone 3
-   changes (KRaft Kafka, `pending_payload`, `published_at`) aren't
-   versioned anywhere. Copy both into the `fastfood` repo (e.g. repo root
-   or a `docker/` folder), update the README "How to run this" steps
-   (currently `cd fast-food-api` → `docker compose up -d`), and check
-   docker-compose's init.sql volume path still resolves from the new location.
-   Ask the user before deleting/retiring the old folder.
-2. **Fix the Kafka-down hang and test it.** When the broker is unreachable,
-   `KafkaTemplate.send()` can block up to `max.block.ms` (60s default)
-   waiting for metadata — inside the after-commit hook on the request
-   thread, so POST /order could hang ~60s. Plan: set short producer
-   timeouts in `KafkaConfig.orderEventProducerFactory()` (e.g.
-   `max.block.ms` a few seconds; review `delivery.timeout.ms` /
-   `request.timeout.ms` together — delivery.timeout.ms must be ≥
-   linger.ms + request.timeout.ms). Then test live: `docker stop
-   fast-food-kafka`, time a POST /order (should return quickly, order
-   saved with `published_at` NULL), `docker start fast-food-kafka`, confirm
-   reconciliation re-publishes it after ~20–30s and it ends CONFIRMED.
-   Update README Known gaps (currently lists this as "not tested").
-3. **Remove the hand-made test orders.** The user asked to remove "the 4
-   dddddddd test orders", but there are actually **6** (checked
-   2026-09-27): `dddddddd-0000-4000-8000-00000000000{1..6}` —
-   0001 FAILED (0 items), 0002 CONFIRMED (1), 0003 FAILED (0),
-   0004 CONFIRMED (1), 0005 CONFIRMED (1), 0006 FAILED (0).
-   Confirm with the user that all 6 should go, then delete their
-   `order_items` rows first (foreign key), then the orders.
-   Also note in the README that these are no longer in the data (DLT still
-   holds 0001's message and the 3 poison-pill messages — fine to leave).
-4. **Optional: listener concurrency = 3.** Set `factory.setConcurrency(3)`
-   on `orderEventKafkaListenerContainerFactory` (one thread per partition),
-   re-run the same K6 test (`k6 run -e EXPECTED_STATUS=202
-   k6-tests/order-create.js`) and compare consumer drain time against the
-   final run (271s, ~105 orders/s). Expect limited gain on this test: every
-   order hits the same restaurant row lock (`FOR UPDATE`).
+K6 run recipe used earlier: start app with `--spring.jpa.show-sql=false`,
+20-order warm-up, wait for PENDING = 0, then run K6; time the drain by
+polling `select count(*) from orders where status='PENDING'`.
 
 K6 run recipe used so far: start app with `--spring.jpa.show-sql=false`,
 20-order warm-up, wait for PENDING = 0, then run K6; time the drain by

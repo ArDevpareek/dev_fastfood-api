@@ -143,23 +143,35 @@ public class OrderService {
 
     private void sendEvent(OrderCreatedEvent event) {
         UUID orderId = event.getOrderId();
-        orderEventKafkaTemplate.send(ORDER_CREATED_TOPIC, orderId.toString(), event)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        // Not fatal by itself — published_at stays NULL, so
-                        // the reconciliation job will re-publish this order
-                        // later. Logged so it's visible, not silent.
-                        log.warn("Failed to publish order-created event for order {}: {}",
-                                orderId, ex.toString());
-                        return;
-                    }
-                    // Kafka acknowledged it (acks=all: stored by every in-sync
-                    // replica). Record that, so the reconciliation job knows
-                    // this order is safely queued rather than lost. This
-                    // callback runs on Kafka's own I/O thread, so it only
-                    // queues the ID; PublishAckRecorder writes them in batches.
-                    publishAckRecorder.record(orderId);
-                });
+        try {
+            orderEventKafkaTemplate.send(ORDER_CREATED_TOPIC, orderId.toString(), event)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            // Not fatal by itself — published_at stays NULL, so
+                            // the reconciliation job will re-publish this order
+                            // later. Logged so it's visible, not silent.
+                            log.warn("Failed to publish order-created event for order {}: {}",
+                                    orderId, ex.toString());
+                            return;
+                        }
+                        // Kafka acknowledged it (acks=all: stored by every in-sync
+                        // replica). Record that, so the reconciliation job knows
+                        // this order is safely queued rather than lost. This
+                        // callback runs on Kafka's own I/O thread, so it only
+                        // queues the ID; PublishAckRecorder writes them in batches.
+                        publishAckRecorder.record(orderId);
+                    });
+        } catch (Exception ex) {
+            // KafkaTemplate.send() doesn't ALWAYS fail through the returned
+            // future above — when the producer can't get cluster metadata
+            // within max.block.ms (broker completely unreachable), it throws
+            // synchronously instead. This runs inside the after-commit hook,
+            // on the request thread, so an uncaught throw here would turn
+            // a successfully-saved PENDING order into a 500 response. Treat
+            // it exactly like the async failure case instead: published_at
+            // stays NULL, and reconciliation retries once Kafka is back.
+            log.warn("Failed to publish order-created event for order {}: {}", orderId, ex.toString());
+        }
     }
 
     // ==================================================================

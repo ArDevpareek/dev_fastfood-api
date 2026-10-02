@@ -46,6 +46,23 @@ public class KafkaConfig {
         // order" requirement — slower than the default, but this is exactly
         // the kind of message where that trade-off is worth it.
         configProps.put(ProducerConfig.ACKS_CONFIG, "all");
+        // Defaults here are built for a healthy broker, not a dead one:
+        // max.block.ms is 60s, so when the broker is completely unreachable,
+        // KafkaTemplate.send() — called from the after-commit hook, on the
+        // request thread — could block POST /order for up to a minute. These
+        // three bound that to a few seconds instead:
+        //   - max.block.ms: how long send() can block waiting for cluster
+        //     metadata or buffer space before giving up.
+        //   - request.timeout.ms: how long a single produce request waits
+        //     for a broker response.
+        //   - delivery.timeout.ms: the overall deadline for a record,
+        //     covering retries; must be >= linger.ms + request.timeout.ms
+        //     (linger.ms is the 0 default here, so 5s comfortably covers it).
+        // Either way the send fails fast, published_at stays NULL, and the
+        // reconciliation job republishes the order once Kafka is back.
+        configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 3_000);
+        configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 3_000);
+        configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 5_000);
         return new DefaultKafkaProducerFactory<>(configProps, new StringSerializer(), orderEventValueSerializer());
     }
 
